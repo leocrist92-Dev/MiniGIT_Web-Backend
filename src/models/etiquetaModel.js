@@ -6,7 +6,7 @@ const EtiquetaModel = {
         // En una BD normal de Git, las etiquetas apuntan a una rama, y la rama al proyecto.
         // Asumiendo que buscamos la rama por defecto del proyecto.
         const query = `
-            SELECT e.hash_version, e.mensaje, e.fecha, u.nombre_usuario as autor
+            SELECT e.hash_version, e.mensaje, e.fecha, r.nombre, u.nombre_usuario as autor
             FROM etiquetas e
             JOIN ramas r ON e.id_rama = r.id
             JOIN usuarios u ON e.id_usuario = u.id
