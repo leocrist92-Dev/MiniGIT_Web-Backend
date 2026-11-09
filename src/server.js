@@ -9,6 +9,8 @@ require('dotenv').config();
 const authRoutes = require('./routes/authRoutes');
 const proyectoRoutes = require('./routes/proyectoRoutes');
 const commitRoutes = require('./routes/commitRoutes');
+const ramaRoutes = require('./routes/ramaRoutes');
+const archivoRoutes = require('./routes/archivoRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,6 +23,8 @@ app.use(express.json()); // Permite recibir datos en formato JSON en req.body
 app.use('/api/auth', authRoutes);
 app.use('/api/proyectos', proyectoRoutes);
 app.use('/api/proyectos', commitRoutes); // Anidado lógicamente con proyectos
+app.use('/api/proyectos', ramaRoutes);
+app.use('/api/archivos', archivoRoutes);
 
 // Ruta de prueba
 app.get('/', (req, res) => {
