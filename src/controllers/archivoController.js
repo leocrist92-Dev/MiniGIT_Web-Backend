@@ -67,30 +67,89 @@ const obtenerDiffCommit = (req, res) => {
   const { repoName, branch, hash } = req.params;
   const zipPath = obtenerRutaZip(repoName, branch, hash);
 
+  if (!fs.existsSync(zipPath)) {
+    return res.status(404).json({ mensaje: 'Commit no encontrado en el disco' });
+  }
+
   try {
     const zip = new AdmZip(zipPath);
     const diffContent = zip.readAsText('diff/diff.txt', 'utf8');
-    
+
     if (!diffContent) {
-      return res.json([]); // Si no hay diff, devolvemos array vacío
+      return res.json([]);
     }
 
-    // Parseo básico del diff.txt para la interfaz (DetalleCommitPage)
     const lineas = diffContent.split('\n');
-    const diffFormateado = lineas.map((linea, index) => {
-      let type = 'normal';
-      if (linea.startsWith('+')) type = 'added';
-      else if (linea.startsWith('-')) type = 'deleted';
+    const diffFormateado = [];
 
-      return {
-        oldLine: type === 'deleted' ? index + 1 : '',
-        newLine: type === 'added' ? index + 1 : '',
-        text: linea,
-        type
-      };
-    });
+    let oldLineNum = 0;
+    let newLineNum = 0;
 
-    res.json(diffFormateado);
+    for (let i = 0; i < lineas.length; i++) {
+      const linea = lineas[i];
+
+      // Ignorar líneas completamente vacías al final del archivo
+      if (i === lineas.length - 1 && linea.trim() === '') continue;
+
+      // 1. Detectar cabeceras de bloques git diff (ej: @@ -1,3 +1,5 @@)
+      if (linea.startsWith('@@')) {
+        const match = linea.match(/@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/);
+        if (match) {
+          oldLineNum = parseInt(match[1], 10);
+          newLineNum = parseInt(match[2], 10);
+        }
+        diffFormateado.push({
+          oldLine: '',
+          newLine: '',
+          text: linea,
+          type: 'hunk'
+        });
+        continue;
+      }
+
+      // 2. Cabeceras de nombres de archivos (--- a/file y +++ b/file)
+      if (linea.startsWith('---') || linea.startsWith('+++')) {
+        diffFormateado.push({
+          oldLine: '',
+          newLine: '',
+          text: linea,
+          type: linea.startsWith('---') ? 'deleted-header' : 'added-header'
+        });
+        continue;
+      }
+
+      // 3. Línea eliminada (-)
+      if (linea.startsWith('-')) {
+        diffFormateado.push({
+          oldLine: oldLineNum++,
+          newLine: '',
+          text: linea,
+          type: 'deleted'
+        });
+        newLineNum++
+      }
+      // 4. Línea añadida (+)
+      else if (linea.startsWith('+')) {
+        diffFormateado.push({
+          oldLine: '',
+          newLine: newLineNum++,
+          text: linea,
+          type: 'added'
+        });
+        oldLineNum++
+      }
+      // 5. Línea normal de contexto (sin cambios)
+      else {
+        diffFormateado.push({
+          oldLine: oldLineNum++,
+          newLine: newLineNum++,
+          text: linea,
+          type: 'normal'
+        });
+      }
+    }
+
+    return res.json(diffFormateado);
   } catch (error) {
     res.status(500).json({ mensaje: 'Error al leer el diff', error });
   }
