@@ -14,7 +14,6 @@ const obtenerEstructuraCommit = (req, res) => {
   const { repoName, branch, hash } = req.params;
   const zipPath = obtenerRutaZip(repoName, branch, hash);
 
-  console.log("ruta: " + zipPath);
   if (!fs.existsSync(zipPath)) {
     return res.status(404).json({ mensaje: 'Commit no encontrado en el disco' });
   }
