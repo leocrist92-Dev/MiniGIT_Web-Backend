@@ -6,13 +6,174 @@ const AdmZip = require('adm-zip');
 //const REPOS_BASE_DIR = path.join(__dirname, '../../../Prueba_servidor_minigit'); 
 const REPOS_BASE_DIR = path.join(__dirname, '../../../../../Prueba_servidor_minigit'); 
 
-const obtenerRutaZip = (repoName, branch, hash) => {
-  return path.join(REPOS_BASE_DIR, repoName, '.commits', branch, `${hash}.zip`);
+// Helper seguro para evitar caracteres de escape (../) en segmentos de ruta
+const limpiarSegmento = (segmento) => path.basename(segmento || '');
+
+// Helper 1: Ruta al archivo ZIP de un commit histórico
+const obtenerRutaZip = (username, repoName, branch, hash) => {
+  return path.join(
+    REPOS_BASE_DIR,
+    limpiarSegmento(username),
+    limpiarSegmento(repoName),
+    '.commits',
+    limpiarSegmento(branch),
+    `${limpiarSegmento(hash)}.zip`
+  );
+};
+
+// Helper 2: Ruta a la carpeta física con los archivos actuales de la rama
+const obtenerRutaArchivosRama = (username, repoName, branch) => {
+  return path.join(
+    REPOS_BASE_DIR,
+    limpiarSegmento(username),
+    limpiarSegmento(repoName),
+    '.commits',
+    limpiarSegmento(branch),
+    'archivos-rama'
+  );
+};
+
+// Helper 3: Escaneo recursivo de carpetas y archivos dentro de 'archivos-rama'
+const escanearDirectorioRecursivo = async (dirBase, dirActual = dirBase) => {
+  const entradas = await fs.promises.readdir(dirActual, { withFileTypes: true });
+  let resultados = [];
+
+  // Ordenar: primero carpetas, luego archivos (ambos alfabéticamente)
+  entradas.sort((a, b) => {
+    if (a.isDirectory() && !b.isDirectory()) return -1;
+    if (!a.isDirectory() && b.isDirectory()) return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  for (const entrada of entradas) {
+    const rutaCompleta = path.join(dirActual, entrada.name);
+    // Normalizar separadores a '/' para compatibilidad entre Windows y navegadores web
+    const rutaRelativa = path.relative(dirBase, rutaCompleta).split(path.sep).join('/');
+    const stats = await fs.promises.stat(rutaCompleta);
+
+    if (entrada.isDirectory()) {
+      resultados.push({
+        name: rutaRelativa,
+        path: rutaRelativa,
+        type: 'folder',
+        msg: 'Directorio de proyecto',
+        date: stats.mtime.toLocaleDateString()
+      });
+      const subResultados = await escanearDirectorioRecursivo(dirBase, rutaCompleta);
+      resultados = resultados.concat(subResultados);
+    } else {
+      resultados.push({
+        name: rutaRelativa,
+        path: rutaRelativa,
+        type: 'file',
+        size: stats.size,
+        msg: 'Archivo actual de rama',
+        date: stats.mtime.toLocaleDateString()
+      });
+    }
+  }
+
+  return resultados;
+};
+
+// ============================================================================
+// 1. NUEVA FUNCIÓN: Obtener estructura completa desde 'archivos-rama'
+// ============================================================================
+const obtenerEstructuraRama = async (req, res) => {
+  const { username, repoName, branch } = req.params;
+  const rutaRama = obtenerRutaArchivosRama(username, repoName, branch);
+
+  try {
+    if (!fs.existsSync(rutaRama)) {
+      // Si la rama aún no tiene carpeta de archivos, devolver lista vacía sin error
+      return res.json([]);
+    }
+
+    const estructura = await escanearDirectorioRecursivo(rutaRama);
+    return res.json(estructura);
+  } catch (error) {
+    console.error('Error al leer la estructura de archivos-rama:', error);
+    return res.status(500).json({ mensaje: 'Error al leer los archivos de la rama en el servidor' });
+  }
+};
+
+// ============================================================================
+// 2. FUNCIÓN MODIFICADA: Leer contenido de archivo directamente desde 'archivos-rama'
+// ============================================================================
+const obtenerContenidoArchivo = async (req, res) => {
+  const { username, repoName, branch } = req.params;
+  const filePath = req.query.path; // Ejemplo: ?path=src/index.js
+
+  if (!filePath) {
+    return res.status(400).json({ mensaje: 'El parámetro query "path" es obligatorio' });
+  }
+
+  const rutaBaseRama = path.resolve(obtenerRutaArchivosRama(username, repoName, branch));
+  const rutaArchivo = path.resolve(rutaBaseRama, filePath);
+
+  // Protección de seguridad contra Path Traversal (../)
+  if (!rutaArchivo.startsWith(rutaBaseRama + path.sep) && rutaArchivo !== rutaBaseRama) {
+    return res.status(403).json({ mensaje: 'Acceso denegado: ruta de archivo no permitida' });
+  }
+
+  try {
+    if (!fs.existsSync(rutaArchivo)) {
+      return res.status(404).json({ mensaje: 'El archivo solicitado no existe en la rama actual' });
+    }
+
+    const stats = await fs.promises.stat(rutaArchivo);
+    if (stats.isDirectory()) {
+      return res.status(400).json({ mensaje: 'La ruta corresponde a una carpeta, no a un archivo' });
+    }
+
+    const content = await fs.promises.readFile(rutaArchivo, 'utf8');
+    return res.json({
+      name: path.basename(rutaArchivo),
+      path: filePath,
+      content,
+      lines: content.split('\n').length
+    });
+  } catch (error) {
+    console.error('Error al leer el archivo desde archivos-rama:', error);
+    return res.status(500).json({ mensaje: 'Error interno al leer el contenido del archivo' });
+  }
+};
+
+// ============================================================================
+// 3. NUEVA FUNCIÓN: Empaquetar 'archivos-rama' en ZIP y enviarlo para Clonar
+// ============================================================================
+const clonarRama = async (req, res) => {
+  const { username, repoName, branch } = req.params;
+  const rutaRama = obtenerRutaArchivosRama(username, repoName, branch);
+
+  try {
+    if (!fs.existsSync(rutaRama)) {
+      return res.status(404).json({ mensaje: 'No existen archivos en esta rama para clonar' });
+    }
+
+    const zip = new AdmZip();
+    // Comprime recursivamente todo el contenido de 'archivos-rama' en la raíz del ZIP
+    zip.addLocalFolder(rutaRama);
+
+    const zipBuffer = zip.toBuffer();
+    const nombreDescarga = `${repoName}-${branch}.zip`;
+
+    res.set({
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${nombreDescarga}"`,
+      'Content-Length': zipBuffer.length
+    });
+
+    return res.send(zipBuffer);
+  } catch (error) {
+    console.error('Error al generar el ZIP para clonar:', error);
+    return res.status(500).json({ mensaje: 'Error al empaquetar los archivos del proyecto' });
+  }
 };
 
 const obtenerEstructuraCommit = (req, res) => {
-  const { repoName, branch, hash } = req.params;
-  const zipPath = obtenerRutaZip(repoName, branch, hash);
+  const { username, repoName, branch, hash } = req.params;
+  const zipPath = obtenerRutaZip(username, repoName, branch, hash);
 
   if (!fs.existsSync(zipPath)) {
     return res.status(404).json({ mensaje: 'Commit no encontrado en el disco' });
@@ -43,28 +204,9 @@ const obtenerEstructuraCommit = (req, res) => {
   }
 };
 
-const obtenerContenidoArchivo = (req, res) => {
-  const { repoName, branch, hash } = req.params;
-  const filePath = req.query.path; // Se envía por query param: ?path=src/index.js
-  const zipPath = obtenerRutaZip(repoName, branch, hash);
-
-  try {
-    const zip = new AdmZip(zipPath);
-    const content = zip.readAsText(filePath, 'utf8');
-    
-    if (content === null) {
-      return res.status(404).json({ mensaje: 'Archivo no encontrado en este commit' });
-    }
-
-    res.json({ content });
-  } catch (error) {
-    res.status(500).json({ mensaje: 'Error al leer el contenido', error });
-  }
-};
-
 const obtenerDiffCommit = (req, res) => {
-  const { repoName, branch, hash } = req.params;
-  const zipPath = obtenerRutaZip(repoName, branch, hash);
+  const { username, repoName, branch, hash } = req.params;
+  const zipPath = obtenerRutaZip(username, repoName, branch, hash);
 
   if (!fs.existsSync(zipPath)) {
     return res.status(404).json({ mensaje: 'Commit no encontrado en el disco' });
@@ -155,7 +297,9 @@ const obtenerDiffCommit = (req, res) => {
 };
 
 module.exports = {
-  obtenerEstructuraCommit,
+  obtenerEstructuraRama,
   obtenerContenidoArchivo,
+  clonarRama,
+  obtenerEstructuraCommit,
   obtenerDiffCommit
 };
