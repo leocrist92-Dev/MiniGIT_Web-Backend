@@ -11,6 +11,7 @@ const proyectoRoutes = require('./routes/proyectoRoutes');
 const commitRoutes = require('./routes/commitRoutes');
 const ramaRoutes = require('./routes/ramaRoutes');
 const archivoRoutes = require('./routes/archivoRoutes');
+const pushRoutes = require('./routes/pushRoutes'); // <-- Importar rutas de Push
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -25,6 +26,7 @@ app.use('/api/proyectos', proyectoRoutes);
 app.use('/api/proyectos', commitRoutes); // Anidado lógicamente con proyectos
 app.use('/api/proyectos', ramaRoutes);
 app.use('/api/archivos', archivoRoutes);
+app.use('/api/push', pushRoutes); // <-- Registrar endpoint POST /api/push
 
 // Ruta de prueba
 app.get('/', (req, res) => {

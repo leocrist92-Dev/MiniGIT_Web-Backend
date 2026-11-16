@@ -78,22 +78,62 @@ const escanearDirectorioRecursivo = async (dirBase, dirActual = dirBase) => {
 
 // ============================================================================
 // 1. NUEVA FUNCIÓN: Obtener estructura completa desde 'archivos-rama'
+//    Soporta parámetro opcional ?dir=ruta/subcarpeta
 // ============================================================================
 const obtenerEstructuraRama = async (req, res) => {
   const { username, repoName, branch } = req.params;
-  const rutaRama = obtenerRutaArchivosRama(username, repoName, branch);
+  const subDir = req.query.dir ? String(req.query.dir).trim() : '';
+
+  const rutaBaseRama = path.resolve(obtenerRutaArchivosRama(username, repoName, branch));
+  const rutaObjetivo = subDir ? path.resolve(rutaBaseRama, subDir) : rutaBaseRama;
+
+  // Protección estricta contra Path Traversal (impide salir de 'archivos-rama' con ../)
+  if (!rutaObjetivo.startsWith(rutaBaseRama + path.sep) && rutaObjetivo !== rutaBaseRama) {
+    return res.status(403).json({ mensaje: 'Acceso denegado: ruta de carpeta no permitida' });
+  }
 
   try {
-    if (!fs.existsSync(rutaRama)) {
-      // Si la rama aún no tiene carpeta de archivos, devolver lista vacía sin error
+    if (!fs.existsSync(rutaObjetivo)) {
       return res.json([]);
     }
 
-    const estructura = await escanearDirectorioRecursivo(rutaRama);
+    const statsDir = await fs.promises.stat(rutaObjetivo);
+    if (!statsDir.isDirectory()) {
+      return res.status(400).json({ mensaje: 'La ruta solicitada no corresponde a un directorio' });
+    }
+
+    // Leer ÚNICAMENTE los archivos y subcarpetas directos del nivel actual
+    const entradas = await fs.promises.readdir(rutaObjetivo, { withFileTypes: true });
+
+    // Ordenar: primero carpetas, luego archivos (ambos alfabéticamente)
+    entradas.sort((a, b) => {
+      if (a.isDirectory() && !b.isDirectory()) return -1;
+      if (!a.isDirectory() && b.isDirectory()) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    const estructura = [];
+
+    for (const entrada of entradas) {
+      const rutaCompleta = path.join(rutaObjetivo, entrada.name);
+      // Ruta relativa completa desde 'archivos-rama' (ej: "src/controllers/user.js")
+      const rutaRelativa = path.relative(rutaBaseRama, rutaCompleta).split(path.sep).join('/');
+      const stats = await fs.promises.stat(rutaCompleta);
+
+      estructura.push({
+        name: entrada.name, // <-- SOLO el nombre corto de la carpeta o archivo
+        path: rutaRelativa, // <-- Ruta relativa completa para navegar o abrir el archivo
+        type: entrada.isDirectory() ? 'folder' : 'file',
+        size: entrada.isDirectory() ? null : stats.size,
+        msg: entrada.isDirectory() ? 'Directorio de proyecto' : 'Archivo actual de rama',
+        date: stats.mtime.toLocaleDateString()
+      });
+    }
+
     return res.json(estructura);
   } catch (error) {
-    console.error('Error al leer la estructura de archivos-rama:', error);
-    return res.status(500).json({ mensaje: 'Error al leer los archivos de la rama en el servidor' });
+    console.error('Error al leer el directorio de archivos-rama:', error);
+    return res.status(500).json({ mensaje: 'Error al leer los archivos de la carpeta en el servidor' });
   }
 };
 
