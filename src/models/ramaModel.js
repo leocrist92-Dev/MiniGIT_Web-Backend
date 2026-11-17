@@ -22,6 +22,20 @@ const obtenerRamasPorProyecto = async (idProyecto) => {
   return filas;
 };
 
+const createRama = async (idProyecto, nombreRama) => {
+  const sql = `
+      INSERT INTO ramas (id_proyecto, nombre, activa) 
+      VALUES (?, ?, 'Si')
+  `;
+
+  console.log(idProyecto)
+  console.log(nombreRama)
+
+  const [result] = await db.execute(sql, [idProyecto, nombreRama]);
+  return result.insertId;
+};
+
 module.exports = {
-  obtenerRamasPorProyecto
+  obtenerRamasPorProyecto,
+  createRama
 };

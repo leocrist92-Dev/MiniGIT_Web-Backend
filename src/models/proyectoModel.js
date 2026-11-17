@@ -58,6 +58,7 @@ const ProyectoModel = {
             proyecto.descripcion, 
             proyecto.visibilidad, 
             proyecto.id_usuario
+            //proyecto.ruta
         ]);
         return result.insertId;
     },
